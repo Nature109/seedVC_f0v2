@@ -83,6 +83,12 @@ class StreamingDataset(IterableDataset):
                 array = np.array(array, dtype=np.float32)
             elif not isinstance(array, np.ndarray):
                 array = np.array(array, dtype=np.float32)
+            else:
+                array = array.astype(np.float32)
+
+            # ステレオをモノラルに変換
+            if array.ndim > 1:
+                array = array.mean(axis=0)
 
             # 長さチェック
             duration = len(array) / orig_sr
@@ -194,7 +200,7 @@ def build_streaming_dataloader(
     # soundfile を使用して音声をデコード (torchcodec の代わり)
     hf_dataset = hf_dataset.cast_column(
         audio_column,
-        Audio(sampling_rate=sr, mono=True, decode=True)
+        Audio(sampling_rate=sr, decode=True)
     )
 
     dataset = StreamingDataset(
