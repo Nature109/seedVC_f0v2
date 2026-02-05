@@ -243,19 +243,46 @@ def build_streaming_dataloader(
             print(f"Using default audio column: '{audio_column}'")
 
     # データセットをロード（parquet を直接読み込んでスキーマ不一致を回避）
-    from huggingface_hub import HfApi, hf_hub_url
-    import fsspec
+    from huggingface_hub import HfApi
 
-    # parquet ファイルを直接読み込む
-    print(f"Loading parquet files directly from {repo_id}...")
-    hf_dataset = load_dataset(
-        "parquet",
-        data_files=f"hf://datasets/{repo_id}/**/*.parquet",
-        split="train",
-        streaming=True,
-        token=token,
-    )
-    print(f"Dataset loaded from parquet files")
+    # HuggingFace Hub からファイルリストを取得
+    api = HfApi()
+    try:
+        files = api.list_repo_files(repo_id, repo_type="dataset", token=token)
+        parquet_files = [f for f in files if f.endswith('.parquet')]
+        if parquet_files:
+            data_files = [f"hf://datasets/{repo_id}/{f}" for f in parquet_files]
+            print(f"Found {len(parquet_files)} parquet files")
+        else:
+            # parquet がない場合は通常のロードを試みる
+            data_files = None
+            print("No parquet files found, trying default load")
+    except Exception as e:
+        print(f"Could not list repo files: {e}")
+        data_files = None
+
+    if data_files:
+        # parquet ファイルを直接読み込む
+        print(f"Loading parquet files directly...")
+        hf_dataset = load_dataset(
+            "parquet",
+            data_files={"train": data_files},
+            split="train",
+            streaming=True,
+            token=token,
+        )
+        print(f"Dataset loaded from parquet files")
+    else:
+        # 通常のロード（フォールバック）
+        hf_dataset = load_dataset(
+            repo_id,
+            split=split,
+            streaming=True,
+            token=token,
+            trust_remote_code=True,
+        )
+        print(f"Dataset loaded with default config")
+
     print(f"Audio column: '{audio_column}'")
 
     dataset = StreamingDataset(
