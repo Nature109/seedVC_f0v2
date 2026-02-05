@@ -111,7 +111,7 @@ model:
 
 # SeedSVC V1 モデル設定
 seedsvc_v1:
-  v1_ckpt_path: "checkpoints/v1/v1.pth"
+  v1_ckpt_path: null  # null = auto-download from HuggingFace
   hidden_dim: 512
   num_heads: 8
   num_layers: 13

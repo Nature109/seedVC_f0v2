@@ -130,9 +130,21 @@ class Trainer:
                 p.requires_grad = False
 
             # 4. Wrap DiT with SeedSVC_V1
+            # Auto-download V1 checkpoint if not specified
+            v1_ckpt_path = seedsvc_cfg.get('v1_ckpt_path')
+            if v1_ckpt_path is None:
+                from hf_utils import load_custom_model_from_hf
+                print("Downloading V1 checkpoint from HuggingFace...")
+                v1_ckpt_path = load_custom_model_from_hf(
+                    "Plachta/Seed-VC",
+                    "DiT_seed_v2_uvit_whisper_base_f0_44k_bigvgan_pruned_ft_ema.pth",
+                    None,
+                )
+                print(f"V1 checkpoint downloaded to: {v1_ckpt_path}")
+
             freeze_v2 = (self.phase == 1)
             self.seedsvc_v1 = SeedSVC_V1(
-                v1_ckpt_path=seedsvc_cfg['v1_ckpt_path'],
+                v1_ckpt_path=v1_ckpt_path,
                 v2_model=self.model.cfm.estimator,
                 hidden_dim=seedsvc_cfg['hidden_dim'],
                 num_heads=seedsvc_cfg['num_heads'],
