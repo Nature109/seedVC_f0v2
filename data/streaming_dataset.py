@@ -198,6 +198,31 @@ def build_streaming_dataloader(
     from datasets import load_dataset, Audio
 
     print(f"Loading streaming dataset from {repo_id}...")
+
+    # audio_column を自動検出（features から取得、イテレートせずに）
+    if audio_column is None:
+        # データセット情報を取得
+        from datasets import get_dataset_config_names, get_dataset_infos
+        try:
+            infos = get_dataset_infos(repo_id, token=token)
+            if infos:
+                info = list(infos.values())[0]
+                if info.features:
+                    feature_names = list(info.features.keys())
+                    if "audio" in feature_names:
+                        audio_column = "audio"
+                    elif "wav" in feature_names:
+                        audio_column = "wav"
+                    print(f"Auto-detected audio column from dataset info: '{audio_column}'")
+        except Exception as e:
+            print(f"Could not get dataset info: {e}")
+
+        # info から取得できなかった場合はデフォルト
+        if audio_column is None:
+            audio_column = "wav"  # Emilia 系は "wav" カラムを使用
+            print(f"Using default audio column: '{audio_column}'")
+
+    # データセットをロード（Audio 型の自動デコードを無効化）
     hf_dataset = load_dataset(
         repo_id,
         split=split,
@@ -205,30 +230,16 @@ def build_streaming_dataloader(
         token=token,
     )
 
-    # audio_column を自動検出
-    if audio_column is None:
-        # 最初のサンプルを取得してカラム名を確認
-        first_sample = next(iter(hf_dataset))
-        if "audio" in first_sample:
-            audio_column = "audio"
-        elif "wav" in first_sample:
-            audio_column = "wav"
-        else:
-            raise ValueError(f"Could not find audio column. Available columns: {list(first_sample.keys())}")
-        print(f"Auto-detected audio column: '{audio_column}'")
-        # イテレータをリセット
-        hf_dataset = load_dataset(repo_id, split=split, streaming=True, token=token)
-
-    # Audio feature として cast を試みる（audio カラムが Audio 型の場合のみ有効）
+    # Audio feature を無効化して生データとして取得
+    # torchcodec 問題を回避するため、Audio 型カラムはデコードせずに読み込む
     try:
-        hf_dataset = hf_dataset.cast_column(
-            audio_column,
-            Audio(sampling_rate=sr, decode=True)
-        )
-        print(f"Cast '{audio_column}' to Audio feature with sr={sr}")
-    except (TypeError, KeyError, Exception) as e:
-        # cast できない場合はそのまま使用（_process_sample で処理）
-        print(f"Note: Could not cast '{audio_column}' to Audio feature ({e}), will process manually")
+        from datasets import Value
+        # wav カラムが Audio 型の場合、String に変換して自動デコードを防ぐ
+        hf_dataset = hf_dataset.cast_column(audio_column, Value("string"))
+        print(f"Disabled automatic audio decoding for '{audio_column}'")
+    except Exception as e:
+        # 既に string 型の場合は何もしない
+        print(f"Audio column '{audio_column}' will be processed manually: {e}")
 
     dataset = StreamingDataset(
         hf_dataset,
