@@ -12,6 +12,12 @@ class CFM(torch.nn.Module):
         self.in_channels = estimator.in_channels
         self.criterion = torch.nn.L1Loss()
 
+    def _f0_kwargs(self, f0, f0_lens):
+        """f0 が None でないときだけ kwargs を返す (後方互換性のため)"""
+        if f0 is None:
+            return {}
+        return dict(f0=f0, f0_lens=f0_lens)
+
     @torch.inference_mode()
     def inference(self,
                   mu: torch.Tensor,
@@ -22,6 +28,8 @@ class CFM(torch.nn.Module):
                   temperature=1.0,
                   inference_cfg_rate=[0.5, 0.5],
                   random_voice=False,
+                  f0=None,
+                  f0_lens=None,
                   ):
         """Forward diffusion
 
@@ -37,6 +45,8 @@ class CFM(torch.nn.Module):
             n_timesteps (int): number of diffusion steps
             temperature (float, optional): temperature for scaling noise. Defaults to 1.0.
             inference_cfg_rate (float, optional): Classifier-Free Guidance inference introduced in VoiceBox. Defaults to 0.5.
+            f0 (torch.Tensor, optional): F0 values in Hz. shape: (batch_size, f0_timesteps)
+            f0_lens (torch.Tensor, optional): F0 lengths. shape: (batch_size,)
 
         Returns:
             sample: generated mel-spectrogram
@@ -46,8 +56,9 @@ class CFM(torch.nn.Module):
         z = torch.randn([B, self.in_channels, T], device=mu.device) * temperature
         t_span = torch.linspace(0, 1, n_timesteps + 1, device=mu.device)
         t_span = t_span + (-1) * (torch.cos(torch.pi / 2 * t_span) - 1 + t_span)
-        return self.solve_euler(z, x_lens, prompt, mu, style, t_span, inference_cfg_rate, random_voice)
-    def solve_euler(self, x, x_lens, prompt, mu, style, t_span, inference_cfg_rate=[0.5, 0.5], random_voice=False,):
+        return self.solve_euler(z, x_lens, prompt, mu, style, t_span, inference_cfg_rate, random_voice, f0=f0, f0_lens=f0_lens)
+
+    def solve_euler(self, x, x_lens, prompt, mu, style, t_span, inference_cfg_rate=[0.5, 0.5], random_voice=False, f0=None, f0_lens=None):
         """
         Fixed euler solver for ODEs.
         Args:
@@ -65,6 +76,8 @@ class CFM(torch.nn.Module):
             inference_cfg_rate (float, optional): Classifier-Free Guidance inference introduced in VoiceBox. Defaults to 0.5.
             sway_sampling (bool, optional): Sway sampling. Defaults to False.
             amo_sampling (bool, optional): AMO sampling. Defaults to False.
+            f0 (torch.Tensor, optional): F0 values in Hz. shape: (batch_size, f0_timesteps)
+            f0_lens (torch.Tensor, optional): F0 lengths. shape: (batch_size,)
         """
         t, _, dt = t_span[0], t_span[-1], t_span[1] - t_span[0]
 
@@ -82,11 +95,16 @@ class CFM(torch.nn.Module):
                     torch.cat([t.unsqueeze(0), t.unsqueeze(0)], dim=0),
                     torch.cat([torch.zeros_like(style), torch.zeros_like(style)], dim=0),
                     torch.cat([mu, torch.zeros_like(mu)], dim=0),
+                    **self._f0_kwargs(
+                        torch.cat([f0, torch.zeros_like(f0)], dim=0) if f0 is not None else None,
+                        torch.cat([f0_lens, f0_lens], dim=0) if f0_lens is not None else None,
+                    ),
                 )
                 cond_txt, uncond = cfg_dphi_dt[0:1], cfg_dphi_dt[1:2]
                 dphi_dt = ((1.0 + inference_cfg_rate[0]) * cond_txt - inference_cfg_rate[0] * uncond)
             elif all(i == 0 for i in inference_cfg_rate):
-                dphi_dt = self.estimator(x, prompt_x, x_lens, t.unsqueeze(0), style, mu)
+                dphi_dt = self.estimator(x, prompt_x, x_lens, t.unsqueeze(0), style, mu,
+                                         **self._f0_kwargs(f0, f0_lens))
             elif inference_cfg_rate[0] == 0:
                 # Classifier-Free Guidance inference introduced in VoiceBox
                 cfg_dphi_dt = self.estimator(
@@ -96,6 +114,10 @@ class CFM(torch.nn.Module):
                     torch.cat([t.unsqueeze(0), t.unsqueeze(0)], dim=0),
                     torch.cat([style, torch.zeros_like(style)], dim=0),
                     torch.cat([mu, mu], dim=0),
+                    **self._f0_kwargs(
+                        torch.cat([f0, f0], dim=0) if f0 is not None else None,
+                        torch.cat([f0_lens, f0_lens], dim=0) if f0_lens is not None else None,
+                    ),
                 )
                 cond_txt_spk, cond_txt = cfg_dphi_dt[0:1], cfg_dphi_dt[1:2]
                 dphi_dt = ((1.0 + inference_cfg_rate[1]) * cond_txt_spk - inference_cfg_rate[1] * cond_txt)
@@ -107,6 +129,10 @@ class CFM(torch.nn.Module):
                     torch.cat([t.unsqueeze(0), t.unsqueeze(0)], dim=0),
                     torch.cat([style, torch.zeros_like(style)], dim=0),
                     torch.cat([mu, torch.zeros_like(mu)], dim=0),
+                    **self._f0_kwargs(
+                        torch.cat([f0, torch.zeros_like(f0)], dim=0) if f0 is not None else None,
+                        torch.cat([f0_lens, f0_lens], dim=0) if f0_lens is not None else None,
+                    ),
                 )
                 cond_txt_spk, uncond = cfg_dphi_dt[0:1], cfg_dphi_dt[1:2]
                 dphi_dt = ((1.0 + inference_cfg_rate[0]) * cond_txt_spk - inference_cfg_rate[0] * uncond)
@@ -119,6 +145,10 @@ class CFM(torch.nn.Module):
                     torch.cat([t.unsqueeze(0), t.unsqueeze(0), t.unsqueeze(0)], dim=0),
                     torch.cat([style, torch.zeros_like(style), torch.zeros_like(style)], dim=0),
                     torch.cat([mu, mu, torch.zeros_like(mu)], dim=0),
+                    **self._f0_kwargs(
+                        torch.cat([f0, f0, torch.zeros_like(f0)], dim=0) if f0 is not None else None,
+                        torch.cat([f0_lens, f0_lens, f0_lens], dim=0) if f0_lens is not None else None,
+                    ),
                 )
                 cond_txt_spk, cond_txt, uncond = cfg_dphi_dt[0:1], cfg_dphi_dt[1:2], cfg_dphi_dt[2:3]
                 dphi_dt = (1.0 + inference_cfg_rate[0] + inference_cfg_rate[1]) * cond_txt_spk - \
@@ -131,7 +161,7 @@ class CFM(torch.nn.Module):
 
         return x
 
-    def forward(self, x1, x_lens, prompt_lens, mu, style):
+    def forward(self, x1, x_lens, prompt_lens, mu, style, f0=None, f0_lens=None):
         """Computes diffusion loss
 
         Args:
@@ -143,6 +173,8 @@ class CFM(torch.nn.Module):
                 shape: (batch_size, n_feats, mel_timesteps)
             spks (torch.Tensor, optional): speaker embedding. Defaults to None.
                 shape: (batch_size, spk_emb_dim)
+            f0 (torch.Tensor, optional): F0 values in Hz. shape: (batch_size, f0_timesteps)
+            f0_lens (torch.Tensor, optional): F0 lengths. shape: (batch_size,)
 
         Returns:
             loss: conditional flow matching loss
@@ -164,7 +196,8 @@ class CFM(torch.nn.Module):
             # range covered by prompt are set to 0
             y[bib, :, :prompt_lens[bib]] = 0
 
-        estimator_out = self.estimator(y, prompt, x_lens, t.squeeze(), style, mu)
+        estimator_out = self.estimator(y, prompt, x_lens, t.squeeze(), style, mu,
+                                       **self._f0_kwargs(f0, f0_lens))
         loss = 0
         for bib in range(b):
             loss += self.criterion(estimator_out[bib, :, prompt_lens[bib]:x_lens[bib]], u[bib, :, prompt_lens[bib]:x_lens[bib]])

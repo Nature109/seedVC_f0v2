@@ -111,7 +111,7 @@ class DiT(torch.nn.Module):
         self.cond_x_merge_linear = nn.Linear(hidden_dim + in_channels + in_channels, hidden_dim)
         self.style_in = nn.Linear(style_encoder_dim, hidden_dim)
 
-    def forward(self, x, prompt_x, x_lens, t, style, cond):
+    def forward(self, x, prompt_x, x_lens, t, style, cond, layer_hook=None):
         class_dropout = False
         content_dropout = False
         if self.training and torch.rand(1) < self.class_dropout_prob:
@@ -144,7 +144,7 @@ class DiT(torch.nn.Module):
         x_mask = sequence_mask(x_lens + self.style_as_token + self.time_as_token, max_length=x_in.size(1)).to(x.device).unsqueeze(1)
         input_pos = torch.arange(x_in.size(1)).to(x.device)
         x_mask_expanded = x_mask[:, None, :].repeat(1, 1, x_in.size(1), 1)
-        x_res = self.transformer(x_in, t1.unsqueeze(1), input_pos, x_mask_expanded)
+        x_res = self.transformer(x_in, t1.unsqueeze(1), input_pos, x_mask_expanded, layer_hook=layer_hook)
         x_res = x_res[:, 1:] if self.time_as_token else x_res
         x_res = x_res[:, 1:] if self.style_as_token else x_res
         x = self.final_mlp(x_res)

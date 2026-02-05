@@ -111,11 +111,14 @@ class Transformer(nn.Module):
                 c: Tensor,
                 input_pos: Optional[Tensor] = None,
                 mask: Optional[Tensor] = None,
+                layer_hook=None,
                 ) -> Tensor:
         mask = mask[..., input_pos]
         freqs_cis = self.freqs_cis[input_pos]
         for i, layer in enumerate(self.layers):
             x = layer(x, c, freqs_cis, mask)
+            if layer_hook is not None:
+                x = layer_hook(x, i)
         x = self.norm(x, c)
         return x
 
