@@ -181,7 +181,7 @@ def build_streaming_dataloader(
     Returns:
         DataLoader
     """
-    from datasets import load_dataset
+    from datasets import load_dataset, Audio
 
     print(f"Loading streaming dataset from {repo_id}...")
     hf_dataset = load_dataset(
@@ -189,6 +189,12 @@ def build_streaming_dataloader(
         split=split,
         streaming=True,
         token=token,
+    )
+
+    # soundfile を使用して音声をデコード (torchcodec の代わり)
+    hf_dataset = hf_dataset.cast_column(
+        audio_column,
+        Audio(sampling_rate=sr, mono=True, decode=True)
     )
 
     dataset = StreamingDataset(
