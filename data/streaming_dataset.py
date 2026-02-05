@@ -242,39 +242,20 @@ def build_streaming_dataloader(
             audio_column = "wav"  # Emilia 系は "wav" カラムを使用
             print(f"Using default audio column: '{audio_column}'")
 
-    # データセットをロード
-    try:
-        # まず通常のロードを試みる
-        hf_dataset = load_dataset(
-            repo_id,
-            split=split,
-            streaming=True,
-            token=token,
-            trust_remote_code=True,
-        )
-        print(f"Dataset loaded with default config")
-    except Exception as e:
-        print(f"Default load failed ({e}), trying with data_files...")
-        # 失敗した場合は parquet ファイルを直接指定
-        hf_dataset = load_dataset(
-            repo_id,
-            split=split,
-            streaming=True,
-            token=token,
-            data_files={"train": "*.parquet"},
-        )
-        print(f"Dataset loaded with parquet files")
+    # データセットをロード（parquet を直接読み込んでスキーマ不一致を回避）
+    from huggingface_hub import HfApi, hf_hub_url
+    import fsspec
 
-    # Audio feature のデコードを無効化
-    # remove_columns で Audio 型カラムを除外し、必要なカラムのみ保持
-    try:
-        # 必要なカラムのみ選択（Audio デコードをトリガーしないカラム）
-        keep_columns = [audio_column]
-        hf_dataset = hf_dataset.select_columns(keep_columns)
-        print(f"Selected columns: {keep_columns}")
-    except Exception as e:
-        print(f"Column selection skipped: {e}")
-
+    # parquet ファイルを直接読み込む
+    print(f"Loading parquet files directly from {repo_id}...")
+    hf_dataset = load_dataset(
+        "parquet",
+        data_files=f"hf://datasets/{repo_id}/**/*.parquet",
+        split="train",
+        streaming=True,
+        token=token,
+    )
+    print(f"Dataset loaded from parquet files")
     print(f"Audio column: '{audio_column}'")
 
     dataset = StreamingDataset(
