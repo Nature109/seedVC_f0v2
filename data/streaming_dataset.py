@@ -67,12 +67,23 @@ class StreamingDataset(IterableDataset):
     def _process_sample(self, sample):
         """HuggingFace の sample を (wave, mel) に変換"""
         try:
-            audio_data = sample[self.audio_column]
+            audio_data = sample.get(self.audio_column)
+            if audio_data is None:
+                return None
 
             # HuggingFace Audio feature の形式
             if isinstance(audio_data, dict) and 'array' in audio_data:
                 array = audio_data['array']
                 orig_sr = audio_data['sampling_rate']
+            elif isinstance(audio_data, dict) and 'path' in audio_data:
+                # Audio feature で path のみの場合
+                import librosa
+                try:
+                    path = audio_data.get('path') or audio_data.get('bytes')
+                    array, orig_sr = librosa.load(path, sr=None)
+                except Exception as e:
+                    print(f"Failed to load audio from path: {e}")
+                    return None
             elif isinstance(audio_data, str):
                 # URL またはパスの場合、librosa で読み込む
                 import librosa
@@ -80,6 +91,15 @@ class StreamingDataset(IterableDataset):
                     array, orig_sr = librosa.load(audio_data, sr=None)
                 except Exception as e:
                     print(f"Failed to load audio from {audio_data}: {e}")
+                    return None
+            elif isinstance(audio_data, bytes):
+                # bytes の場合、soundfile で読み込む
+                import soundfile as sf
+                import io
+                try:
+                    array, orig_sr = sf.read(io.BytesIO(audio_data))
+                except Exception as e:
+                    print(f"Failed to load audio from bytes: {e}")
                     return None
             else:
                 # 生の numpy array の場合
@@ -222,24 +242,40 @@ def build_streaming_dataloader(
             audio_column = "wav"  # Emilia 系は "wav" カラムを使用
             print(f"Using default audio column: '{audio_column}'")
 
-    # データセットをロード（Audio 型の自動デコードを無効化）
-    hf_dataset = load_dataset(
-        repo_id,
-        split=split,
-        streaming=True,
-        token=token,
-    )
-
-    # Audio feature を無効化して生データとして取得
-    # torchcodec 問題を回避するため、Audio 型カラムはデコードせずに読み込む
+    # データセットをロード
     try:
-        from datasets import Value
-        # wav カラムが Audio 型の場合、String に変換して自動デコードを防ぐ
-        hf_dataset = hf_dataset.cast_column(audio_column, Value("string"))
-        print(f"Disabled automatic audio decoding for '{audio_column}'")
+        # まず通常のロードを試みる
+        hf_dataset = load_dataset(
+            repo_id,
+            split=split,
+            streaming=True,
+            token=token,
+            trust_remote_code=True,
+        )
+        print(f"Dataset loaded with default config")
     except Exception as e:
-        # 既に string 型の場合は何もしない
-        print(f"Audio column '{audio_column}' will be processed manually: {e}")
+        print(f"Default load failed ({e}), trying with data_files...")
+        # 失敗した場合は parquet ファイルを直接指定
+        hf_dataset = load_dataset(
+            repo_id,
+            split=split,
+            streaming=True,
+            token=token,
+            data_files={"train": "*.parquet"},
+        )
+        print(f"Dataset loaded with parquet files")
+
+    # Audio feature のデコードを無効化
+    # remove_columns で Audio 型カラムを除外し、必要なカラムのみ保持
+    try:
+        # 必要なカラムのみ選択（Audio デコードをトリガーしないカラム）
+        keep_columns = [audio_column]
+        hf_dataset = hf_dataset.select_columns(keep_columns)
+        print(f"Selected columns: {keep_columns}")
+    except Exception as e:
+        print(f"Column selection skipped: {e}")
+
+    print(f"Audio column: '{audio_column}'")
 
     dataset = StreamingDataset(
         hf_dataset,
