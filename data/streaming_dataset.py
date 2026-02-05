@@ -70,9 +70,17 @@ class StreamingDataset(IterableDataset):
             audio_data = sample[self.audio_column]
 
             # HuggingFace Audio feature の形式
-            if isinstance(audio_data, dict):
+            if isinstance(audio_data, dict) and 'array' in audio_data:
                 array = audio_data['array']
                 orig_sr = audio_data['sampling_rate']
+            elif isinstance(audio_data, str):
+                # URL またはパスの場合、librosa で読み込む
+                import librosa
+                try:
+                    array, orig_sr = librosa.load(audio_data, sr=None)
+                except Exception as e:
+                    print(f"Failed to load audio from {audio_data}: {e}")
+                    return None
             else:
                 # 生の numpy array の場合
                 array = audio_data
@@ -166,7 +174,7 @@ def build_streaming_dataloader(
     batch_size=2,
     num_workers=0,
     split="train",
-    audio_column="audio",
+    audio_column=None,  # None = auto-detect ("audio" or "wav")
     shuffle_buffer_size=1000,
     token=None,
 ):
@@ -197,11 +205,30 @@ def build_streaming_dataloader(
         token=token,
     )
 
-    # soundfile を使用して音声をデコード (torchcodec の代わり)
-    hf_dataset = hf_dataset.cast_column(
-        audio_column,
-        Audio(sampling_rate=sr, decode=True)
-    )
+    # audio_column を自動検出
+    if audio_column is None:
+        # 最初のサンプルを取得してカラム名を確認
+        first_sample = next(iter(hf_dataset))
+        if "audio" in first_sample:
+            audio_column = "audio"
+        elif "wav" in first_sample:
+            audio_column = "wav"
+        else:
+            raise ValueError(f"Could not find audio column. Available columns: {list(first_sample.keys())}")
+        print(f"Auto-detected audio column: '{audio_column}'")
+        # イテレータをリセット
+        hf_dataset = load_dataset(repo_id, split=split, streaming=True, token=token)
+
+    # Audio feature として cast を試みる（audio カラムが Audio 型の場合のみ有効）
+    try:
+        hf_dataset = hf_dataset.cast_column(
+            audio_column,
+            Audio(sampling_rate=sr, decode=True)
+        )
+        print(f"Cast '{audio_column}' to Audio feature with sr={sr}")
+    except (TypeError, KeyError, Exception) as e:
+        # cast できない場合はそのまま使用（_process_sample で処理）
+        print(f"Note: Could not cast '{audio_column}' to Audio feature ({e}), will process manually")
 
     dataset = StreamingDataset(
         hf_dataset,
